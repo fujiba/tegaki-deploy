@@ -1,0 +1,27 @@
+{
+  "name": "gdrive-sync",
+  "description": "Sync contents from Google Drive to Firebase Hosting",
+  "scripts": {
+    "lint": "eslint .",
+    "serve": "firebase emulators:start --only functions:gdrive-sync",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions:gdrive-sync",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^13.3.0",
+    "firebase-functions": "^6.3.2",
+    "firebase-tools": "^13.8.0",
+    "fs-extra": "^11.2.0",
+    "googleapis": "^137.1.0"
+  },
+  "devDependencies": {
+    "firebase-functions-test": "^3.4.1"
+  },
+  "private": true
+}

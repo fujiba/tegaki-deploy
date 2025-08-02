@@ -1,0 +1,27 @@
+{
+  "functions": [
+    {
+      "source": "functions/gdrive-sync",
+      "codebase": "gdrive-sync",
+      "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*.log", "*.local"]
+    }
+  ],
+  "hosting": [
+    {
+      "target": "prod",
+      "public": "website/public",
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+    },
+    {
+      "target": "dev",
+      "public": "public.dev",
+      "rewrites": [
+        {
+          "source": "**",
+          "function": "app"
+        }
+      ],
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+    }
+  ]
+}

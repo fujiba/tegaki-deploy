@@ -1,0 +1,28 @@
+name: "Polling Sync from Google Drive"
+
+on:
+  schedule:
+    # 毎日 AM 3:15 (JST) に実行 (UTCでは前日の18:15)
+    - cron: "15 18 * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger-sync:
+    name: "Trigger GDrive Sync Function"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Invoke Cloud Function with secret token"
+        run: |
+          response=$(curl -s -w "%{http_code}" -X POST "${{ secrets.GDRIVE_SYNC_FUNCTION_URL }}" \
+            -H "Authorization: Bearer ${{ secrets.FUNCTION_SECRET_TOKEN }}")
+          http_code=$(tail -n1 <<< "$response")
+          body=$(head -n-1 <<< "$response")
+
+          echo "Status Code: $http_code"
+          echo "Response Body: $body"
+
+          if [ "$http_code" -ne 200 ]; then
+            echo "::error::Function invocation failed with status code $http_code"
+            exit 1
+          fi

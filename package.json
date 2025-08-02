@@ -1,0 +1,19 @@
+{
+  "name": "hugo-firebase-boilerplate",
+  "version": "0.1.0",
+  "description": "Boilerplate for Firebase with Hugo contents.",
+  "scripts": {
+    "deploy:prod": "(cd website && hugo --minify) && firebase deploy --only hosting:prod",
+    "init": "scripts/init-setup.sh",
+    "deploy:dev": "scripts/deploy-dev.sh",
+    "serve": "(cd website && hugo server)"
+  },
+  "author": "T.Fujiba",
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^9.2.0",
+    "eslint-config-prettier": "^9.1.0",
+    "firebase-tools": "^13.8.0",
+    "prettier": "^3.2.5"
+  }
+}
