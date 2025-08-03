@@ -462,3 +462,4 @@ $RECYCLE.BIN/
 docs/requirements.md
 functions/gdrive-sync/.env.*
 functions/gdrive-sync/.secret.*
+config.yaml

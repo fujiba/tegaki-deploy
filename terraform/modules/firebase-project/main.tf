@@ -41,7 +41,8 @@ locals {
     # Enabling the ServiceUsage API allows the new project to be quota checked from now on.
     "serviceusage.googleapis.com",
     "drive.googleapis.com",
-    "cloudtasks.googleapis.com"
+    "cloudtasks.googleapis.com",
+    "firestore.googleapis.com",
   ]
 }
 

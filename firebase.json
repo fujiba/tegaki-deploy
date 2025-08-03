@@ -6,21 +6,14 @@
       "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*.log", "*.local"]
     }
   ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
   "hosting": [
     {
       "target": "prod",
       "public": "website/public",
-      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
-    },
-    {
-      "target": "dev",
-      "public": "public.dev",
-      "rewrites": [
-        {
-          "source": "**",
-          "function": "app"
-        }
-      ],
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
     }
   ]

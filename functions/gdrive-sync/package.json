@@ -3,7 +3,7 @@
   "description": "Sync contents from Google Drive to Firebase Hosting",
   "scripts": {
     "lint": "eslint .",
-    "serve": "firebase emulators:start --only functions:gdrive-sync",
+    "serve": "firebase emulators:start --only functions:gdrive-sync,firestore",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions:gdrive-sync",

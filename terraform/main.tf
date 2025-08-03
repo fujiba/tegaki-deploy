@@ -27,6 +27,7 @@ module "hosting" {
   source       = "./modules/firebase-hosting"
   project_id   = module.project.project_id
   display_name = "${module.project.project_id} development site"
+  region       = var.region
   providers = {
     google-beta = google-beta
   }

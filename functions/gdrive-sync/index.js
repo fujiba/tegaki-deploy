@@ -1,4 +1,5 @@
 const admin = require('firebase-admin')
+const { FieldValue } = require('firebase-admin/firestore')
 const { google } = require('googleapis')
 const fs = require('fs-extra')
 const path = require('path')
@@ -12,6 +13,7 @@ const { defineString, defineSecret } = require('firebase-functions/params')
 const { setGlobalOptions } = require('firebase-functions/v2')
 
 admin.initializeApp()
+const db = admin.firestore()
 
 const serviceAccountEmailParam = defineString('SERVICE_ACCOUNT_EMAIL', {
   description: 'The service account email to run the functions with. e.g. deploy@<project-id>.iam.gserviceaccount.com'
@@ -129,18 +131,30 @@ function parseMemoryToBytes(memoryString) {
 }
 
 /**
- * 指定されたフォルダ内のファイルの合計サイズを取得する（再帰的）
+ * ★★★ 変更: Google Driveのフォルダ状態（合計サイズとスナップショット）を一度に取得する ★★★
+ * この関数の最初に、フォルダへのアクセス権チェックも行います。
  * @param {object} drive 認証済みのGoogle Drive APIクライアント
  * @param {string} folderId 対象のGoogle DriveフォルダID
- * @return {Promise<number>} 合計ファイルサイズ（バイト）
+ * @return {Promise<{totalSize: number, snapshot: string}>} 合計サイズとスナップショットを含むオブジェクト
  */
-async function getTotalSize(drive, folderId) {
+async function getDriveFolderState(drive, folderId) {
+  // 1. まず、フォルダ自体にアクセスできるかを確認
+  try {
+    await drive.files.get({ fileId: folderId, fields: 'id' })
+  } catch (error) {
+    console.error(`Failed to access Google Drive folder (ID: ${folderId}). Please check permissions.`, error)
+    throw new Error(
+      `Failed to access Google Drive folder. Please ensure the service account has at least "Viewer" permission on the folder.`
+    )
+  }
+
+  // 2. アクセスできたら、ファイル一覧を取得して状態を計算
   const files = []
   let pageToken = null
   do {
     const res = await drive.files.list({
       q: `'${folderId}' in parents and trashed = false`,
-      fields: 'nextPageToken, files(id, name, mimeType, size)',
+      fields: 'nextPageToken, files(id, name, mimeType, size, modifiedTime)',
       pageToken: pageToken,
       pageSize: 1000
     })
@@ -150,99 +164,50 @@ async function getTotalSize(drive, folderId) {
     pageToken = res.data.nextPageToken
   } while (pageToken)
 
-  const sizes = await Promise.all(
-    files.map(async (file) => {
-      if (file.mimeType === 'application/vnd.google-apps.folder') {
-        return await getTotalSize(drive, file.id)
-      }
-      // Google Docs形式のファイルはsizeが未定義の場合があるため、0として扱う
-      return Number(file.size) || 0
-    })
+  let totalSize = 0
+  const snapshotParts = []
+
+  const subFolderStates = await Promise.all(
+    files
+      .filter((file) => file.mimeType === 'application/vnd.google-apps.folder')
+      .map((folder) => getDriveFolderState(drive, folder.id))
   )
 
-  return sizes.reduce((sum, size) => sum + size, 0)
+  for (const state of subFolderStates) {
+    totalSize += state.totalSize
+    snapshotParts.push(state.snapshot)
+  }
+
+  const currentLevelFiles = files.filter((file) => file.mimeType !== 'application/vnd.google-apps.folder')
+  for (const file of currentLevelFiles) {
+    totalSize += Number(file.size) || 0
+    snapshotParts.push(`${file.id}:${file.modifiedTime}`)
+  }
+
+  snapshotParts.sort()
+  const snapshot = snapshotParts.join('|')
+
+  return { totalSize, snapshot }
 }
 
 /**
  * ===================================================================
- *  CORE LOGIC: Google DriveからダウンロードしてHostingにデプロイする
+ * CORE LOGIC: Google DriveからダウンロードしてHostingにデプロイする
  * ===================================================================
  */
-async function downloadAndDeploy() {
+async function downloadAndDeploy(drive, folderId) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gdrive-sync-'))
   console.log(`Created temporary directory: ${tempDir}`)
-
   try {
-    // 1. Google Drive APIの認証
-    const auth = new google.auth.GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/drive.readonly']
-    })
-    const drive = google.drive({ version: 'v3', auth })
-
-    const folderUrl = folderUrlParam.value()
-    const folderId = parseFolderIdFromUrl(folderUrl)
-
-    if (!folderId) {
-      throw new Error(`Invalid Google Drive folder URL: "${folderUrl}". Could not extract folder ID.`)
-    }
-
-    // フォルダへのアクセス権を明示的にチェック
-    try {
-      console.log(`Checking access permissions for folder: ${folderId}`)
-      await drive.files.get({ fileId: folderId, fields: 'id' })
-      console.log('✅ Access permission check successful.')
-    } catch (error) {
-      // drive.files.get が失敗した場合、権限がない、またはフォルダが存在しない可能性が高い
-      let detailedMessage =
-        'Failed to access Google Drive folder. Please ensure the folder exists and the service account has at least "Viewer" permission on the folder.'
-      if (error.response && error.response.data && error.response.data.error) {
-        const apiError = error.response.data.error
-        detailedMessage += ` (API Error: ${apiError.message} [${apiError.code}])`
-      }
-      console.error(
-        `Failed to access Google Drive folder. Please check if the service account has permission for folder ID: ${folderId}`,
-        error.response ? JSON.stringify(error.response.data, null, 2) : error
-      )
-      throw new Error(detailedMessage)
-    }
-
-    // ダウンロード前に合計ファイルサイズをチェック
-    console.log(`Checking total file size in Google Drive... for ${folderId}`)
-    const totalSize = await getTotalSize(drive, folderId)
-    const memoryLimit = parseMemoryToBytes(FUNCTION_MEMORY)
-    // 念のため90%のマージンを設ける
-    const safeMemoryLimit = memoryLimit * 0.9
-
-    const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2)
-    const memoryLimitMB = (safeMemoryLimit / 1024 / 1024).toFixed(2)
-
-    console.log(`Total file size: ${totalSizeMB}MB`)
-    console.log(`Function memory limit (safe margin 90%): ${memoryLimitMB}MB`)
-    console.log('✅ Total size check successful.')
-
-    if (totalSize > safeMemoryLimit) {
-      throw new Error(
-        `Total file size (${totalSizeMB}MB) exceeds 90% of the function's memory limit (${memoryLimitMB}MB). Please upgrade your plan or reduce file sizes.`
-      )
-    }
-    // ★★★ チェックここまで ★★★
-
-    // 2. Google Driveからファイルを再帰的にダウンロード
     console.log('Starting file download process...')
     await downloadDirectory(drive, folderId, tempDir)
     console.log('✅ Successfully downloaded all files from Google Drive.')
 
-    // 3. Firebase Hostingへデプロイ
     console.log(`Deploying to Firebase Hosting target: ${targetHostingParam.value()}...`)
-
-    // firebase-toolsの`deploy`は、複数サイト構成(firebase.jsonのhostingが配列)の場合、
-    // `public`オプションをサポートしていません。
-    // そのため、デプロイ対象のファイルが入った一時ディレクトリ内に、
-    // シングルサイト構成のシンプルな`firebase.json`を動的に生成します。
     const tempFirebaseJsonPath = path.join(tempDir, 'firebase.json')
     const firebaseJsonContent = {
       hosting: {
-        public: '.', // cwdからの相対パスで、カレントディレクトリを指す
+        public: '.',
         ignore: ['firebase.json', '**/.*', '**/node_modules/**']
       }
     }
@@ -256,7 +221,6 @@ async function downloadAndDeploy() {
     })
     console.log('✅ Deployment successful!')
   } finally {
-    // 4. 一時ディレクトリをクリーンアップ
     await fs.remove(tempDir)
     console.log(`Cleaned up temporary directory: ${tempDir}`)
   }
@@ -269,28 +233,74 @@ async function downloadAndDeploy() {
  */
 exports.pollingSync = onRequest({ ...V2_FUNCTION_OPTIONS, secrets: [POLLING_SYNC_SECRET] }, async (req, res) => {
   await logExecutionIdentity()
-  // --- Bearer Token Authentication ---
   const authHeader = req.headers.authorization || ''
   const [scheme, token] = authHeader.split(' ')
   const expectedToken = POLLING_SYNC_SECRET.value()
-
   if (scheme !== 'Bearer' || !token || token !== expectedToken) {
     console.error('Unauthorized: Invalid or missing authentication token.')
     res.status(401).send('Unauthorized')
     return
   }
-  // --- End Authentication ---
 
   console.log('Light Plan (Polling) sync process started.')
   try {
-    // 認証成功、メインロジックを実行
-    await downloadAndDeploy()
+    // ★★★ 認証とDriveクライアントの初期化を一度だけ行う ★★★
+    const auth = new google.auth.GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/drive.readonly']
+    })
+    const drive = google.drive({ version: 'v3', auth })
+
+    const folderId = parseFolderIdFromUrl(folderUrlParam.value())
+    if (!folderId) {
+      throw new Error('Folder ID could not be parsed from URL.')
+    }
+
+    const target = targetHostingParam.value()
+    const stateDocRef = db.collection('tegaki-deploy-states').doc(target)
+
+    // 1. 現在のDriveの状態（権限チェック、サイズ、スナップショット）を一度に取得
+    const { totalSize, snapshot: currentSnapshot } = await getDriveFolderState(drive, folderId)
+
+    // 2. Firestoreから前回のスナップショットを取得
+    const doc = await stateDocRef.get()
+    const previousSnapshot = doc.exists ? doc.data().snapshot : null
+
+    // 3. スナップショットを比較
+    if (currentSnapshot === previousSnapshot) {
+      console.log('No changes detected in Google Drive. Skipping deployment.')
+      res.status(200).send('No changes detected. Skipped deployment.')
+      return
+    }
+
+    console.log('Changes detected. Starting deployment process...')
+
+    // 4. メモリサイズをチェック
+    const memoryLimit = parseMemoryToBytes(FUNCTION_MEMORY)
+    const safeMemoryLimit = memoryLimit * 0.9
+    const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2)
+    const memoryLimitMB = (safeMemoryLimit / 1024 / 1024).toFixed(2)
+    console.log(`Total file size: ${totalSizeMB}MB`)
+    console.log(`Function memory limit (safe margin 90%): ${memoryLimitMB}MB`)
+    if (totalSize > safeMemoryLimit) {
+      throw new Error(
+        `Total file size (${totalSizeMB}MB) exceeds 90% of the function's memory limit (${memoryLimitMB}MB).`
+      )
+    }
+
+    // 5. 変更があったので、デプロイを実行
+    await downloadAndDeploy(drive, folderId)
+
+    // 6. デプロイ成功後、新しいスナップショットをFirestoreに保存
+    await stateDocRef.set({
+      snapshot: currentSnapshot,
+      lastUpdated: FieldValue.serverTimestamp()
+    })
+    console.log(`Successfully updated state for target: ${target}`)
+
     res.status(200).send('Polling sync and deploy process completed successfully.')
   } catch (error) {
-    // エラーオブジェクト全体をログに出力し、クライアントにはエラーメッセージを返す
-    console.error('An error occurred during the polling sync process:', error.stack || error)
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    res.status(500).send(`Polling sync and deploy process failed: ${errorMessage}`)
+    console.error('An error occurred during the polling sync process:', error)
+    res.status(500).send('Polling sync and deploy process failed. Check logs for details.')
   }
 })
 
