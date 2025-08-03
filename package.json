@@ -1,12 +1,10 @@
 {
-  "name": "hugo-firebase-boilerplate",
+  "name": "tegaki-deploy",
   "version": "0.1.0",
-  "description": "Boilerplate for Firebase with Hugo contents.",
+  "description": "Say goodbye to server management! `tegaki-deploy` is an automated framework to publish a static website on Firebase Hosting directly from a Google Drive folder. It uses Terraform and GitHub Actions to handle everything. No Git, no CLI, no complex CMS needed. Just drag, drop, and deploy.",
   "scripts": {
-    "deploy:prod": "(cd website && hugo --minify) && firebase deploy --only hosting:prod",
     "init": "scripts/init-setup.sh",
-    "deploy:dev": "scripts/deploy-dev.sh",
-    "serve": "(cd website && hugo server)"
+    "deploy:gdrive-sync": "npm install --prefix functions/gdrive-sync && npm run deploy --prefix functions/gdrive-sync"
   },
   "author": "T.Fujiba",
   "license": "MIT",

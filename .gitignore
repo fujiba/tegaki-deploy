@@ -458,7 +458,7 @@ $RECYCLE.BIN/
 # project local
 **/output/secrets/
 .gemini/*.md
-functions/gdrive-sync/.secret.local
-functions/gdrive-sync/.env.gdrive-sync
 .gemini/settings.json
 docs/requirements.md
+functions/gdrive-sync/.env.*
+functions/gdrive-sync/.secret.*

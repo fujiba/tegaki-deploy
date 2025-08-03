@@ -1,9 +1,9 @@
 name: "Polling Sync from Google Drive"
 
 on:
-  schedule:
-    # 毎日 AM 3:15 (JST) に実行 (UTCでは前日の18:15)
-    - cron: "15 18 * * *"
+  #schedule:
+  #  # 毎日 AM 3:15 (JST) に実行 (UTCでは前日の18:15)
+  #  - cron: "15 18 * * *"
   workflow_dispatch:
 
 jobs:

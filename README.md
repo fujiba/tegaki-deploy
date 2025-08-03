@@ -70,13 +70,18 @@ Tegaki Deployは、Google Driveをコンテンツ管理のインターフェー�
    openssl rand -base64 32
    ```
 
+   実行後、**ローカル開発用の設定ファイル (`.env.{projectId}`)** が `functions/gdrive-sync` ディレクトリに作成され、**本番環境（GitHub Actions）に設定すべき2つの値**がターミナルに表示されます。
    b. **Firebase Secretの設定**: `functions/gdrive-sync`ディレクトリで以下のコマンドを実行し、プロンプトに生成したトークンを貼り付けます。
+   プロビジョニングされたサービスアカウントのメールアドレスに対し、コンテンツ管理用Google Driveフォルダへのアクセス権を付与します。
 
    ```sh
    (cd functions/gdrive-sync && firebase functions:secrets:set POLLING_SYNC_SECRET)
    ```
 
-   c. **Functionのデプロイ**: 設定したSecretを反映させるため、再度Functionをデプロイします。
+   - `GDRIVE_FOLDER_URL`: 同期対象のGoogle DriveフォルダURL
+     c. **Functionのデプロイ**: 設定したSecretを反映させるため、再度Functionをデプロイします。
+
+1. **公開アクセスの無効化**:
 
    ```sh
    (cd functions/gdrive-sync && npm run deploy)
@@ -89,6 +94,8 @@ Tegaki Deployは、Google Driveをコンテンツ管理のインターフェー�
    a. **Function URLの登録**: GCPコンソールでデプロイした`pollingSync`関数のトリガーURLをコピーし、GitHubリポジトリのSecretsに`GDRIVE_SYNC_FUNCTION_URL`として登録します。
    b. **認証トークンの登録**: ステップ4で生成したトークンを、GitHubリポジトリのSecretsに`FUNCTION_SECRET_TOKEN`として登録します。
    c. **公開アクセスの無効化**: セキュリティを確保するため、GCPコンソールの`pollingSync`関数の権限設定から、プリンシパルが`allUsers`のエントリを削除します。
+
+   セキュリティを確保するため、GCPコンソールの`pollingSync`関数の権限設定から、プリンシパルが`allUsers`のエントリを削除します。
 
 以上の手順で、初期設定は完了です。`main`ブランチへのプッシュ後、設定したスケジュール（デフォルトでは日本時間午前3:15）で自動的に同期が実行されます。
 
@@ -111,27 +118,39 @@ curl -X POST "YOUR_FUNCTION_URL" \
 
 ## ローカルでの開発 (Local Development)
 
-`gdrive-sync`関数をローカルでテスト・開発する手順は以下の通りです。
+```
 
-1. **ローカル用Secretファイルの作成**:
-   `functions/gdrive-sync`ディレクトリに`.secret.local`というファイルを作成し、認証トークンを記述します。このファイルは`.gitignore`によりリポジトリには含まれません。
+```
 
-   ```sh
-   # functions/gdrive-sync/.secret.local
-   POLLING_SYNC_SECRET=ここに生成したトークンを貼り付けます
-   ```
+1. **関数の呼び出し**:
+
+   # [PORT]と[PROJECT_ID]はエミュレータのログに表示される値に置き換えてください。YOUR_SECRET_TOKENは.secret.localに記載の値です。
+
+   `setup-firebase.sh`スクリプトを初回実行すると、ローカル開発用の設定ファイル（`.env.gdrive-sync` と `.secret.local`）が自動で生成されます。これらのファイルが既に存在する場合、スクリプトは上書きを行いません。これにより、`.env.local`など、ご自身で管理されている設定ファイルが保護されます。
+   `gdrive-sync`関数をローカルでテスト・開発する手順は以下の通りです。
+
+   # YOUR_SECRET_TOKENは .env.{projectId} ファイルに記載の値です。
 
 2. **エミュレータの起動**:
 
-   ```sh
+3. **Firebase Local Emulators の設定**:
    (cd functions/gdrive-sync && npm run serve)
+
+   ```sh
+
    ```
 
-3. **関数の呼び出し**:
-   エミュレータが起動したら、別のターミナルから`curl`コマンドで関数を呼び出します。
+4. **関数の呼び出し**:
 
+   ```
+
+   ```
+
+5. **関数の呼び出し**:
+   # [PORT]と[PROJECT_ID]はエミュレータのログに表示される値に置き換えてください。YOUR_SECRET_TOKENは.secret.localに記載の値です。
    ```sh
-   # [PORT]と[PROJECT_ID]はエミュレータのログに表示される値に置き換えてください
+   # [PORT]と[PROJECT_ID]はエミュレータのログに表示される値に置き換えてください。
+   # YOUR_SECRET_TOKENは .env.{projectId} ファイルに記載の値です。
    curl -X POST "http://127.0.0.1:[PORT]/[PROJECT_ID]/asia-northeast1/pollingSync" \
      -H "Authorization: Bearer YOUR_SECRET_TOKEN"
    ```

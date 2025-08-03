@@ -3,6 +3,7 @@ const { google } = require('googleapis')
 const fs = require('fs-extra')
 const path = require('path')
 const os = require('os')
+const axios = require('axios')
 const { deploy } = require('firebase-tools')
 
 const { onRequest } = require('firebase-functions/v2/https')
@@ -12,36 +13,69 @@ const { setGlobalOptions } = require('firebase-functions/v2')
 
 admin.initializeApp()
 
-// パラメータを定義します。
-// これらはデプロイ時に設定する環境変数で、`functions.config()` の後継です。
-// .env.gdrive-sync ファイルを作成して値を設定できます。
-// 例:
-// GDRIVE_FOLDER_ID="your-google-drive-folder-id"
-// GDRIVE_FOLDER_URL="https://drive.google.com/drive/folders/xxxxxxxx"
+const serviceAccountEmailParam = defineString('SERVICE_ACCOUNT_EMAIL', {
+  description: 'The service account email to run the functions with. e.g. deploy@<project-id>.iam.gserviceaccount.com'
+})
+
 const folderUrlParam = defineString('GDRIVE_FOLDER_URL', {
   description:
     'The full URL of the Google Drive folder to sync from. e.g. https://drive.google.com/drive/folders/your-folder-id'
 })
+
 const targetHostingParam = defineString('TARGET_HOSTING', {
   description: 'The Firebase Hosting target to deploy to.',
   default: 'prod'
 })
+
 // 認証用の共有シークレットを定義
 const POLLING_SYNC_SECRET = defineSecret('POLLING_SYNC_SECRET', {
   description: 'A secret token to authenticate requests to the pollingSync function.'
 })
-// 関数のメモリやタイムアウトといったデプロイ時の設定は、通常の環境変数から読み込みます。
-// Firebaseのパラメータ(defineStringなど)は、実行時のロジック内で .value() を使って値を取得するためのものです。
+
 const FUNCTION_MEMORY = process.env.FUNCTION_MEMORY || '1GiB'
 const PROJECT_ID = process.env.GCLOUD_PROJECT
 
 // v2 SDKではGiB/MiB単位で指定します
 const V2_FUNCTION_OPTIONS = {
   timeoutSeconds: 300,
-  memory: FUNCTION_MEMORY
+  memory: FUNCTION_MEMORY,
+  serviceAccount: serviceAccountEmailParam
 }
 
 setGlobalOptions({ region: 'asia-northeast1' })
+
+/**
+ * このFunctionを実行しているサービスアカウントのメールアドレスを取得し、ログに出力します。
+ * Google Cloudのメタデータサーバーに問い合わせて情報を取得します。
+ */
+const logExecutionIdentity = async () => {
+  // エミュレータ環境ではスキップ
+  if (process.env.FUNCTIONS_EMULATOR === 'true') {
+    console.log('Running in emulator, skipping IAM check.')
+    return
+  }
+  // メタデータサーバーのエンドポイントURL
+  const url = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email'
+
+  // メタデータサーバーへのリクエストには、このヘッダーが必須です。
+  const options = {
+    headers: {
+      'Metadata-Flavor': 'Google'
+    }
+  }
+
+  try {
+    // メタデータサーバーにHTTP GETリクエストを送信
+    const response = await axios.get(url, options)
+    const iamEmail = response.data
+
+    // 取得したIAM情報をログに出力
+    console.log(`Function executed by IAM: ${iamEmail}`)
+  } catch (error) {
+    // エラーが発生した場合は、その旨をログに出力
+    console.error('Failed to retrieve execution IAM.', error)
+  }
+}
 
 /**
  * Google DriveのフォルダURLからフォルダIDを抽出する
@@ -152,8 +186,28 @@ async function downloadAndDeploy() {
       throw new Error(`Invalid Google Drive folder URL: "${folderUrl}". Could not extract folder ID.`)
     }
 
-    // ★★★ 追加: ダウンロード前に合計ファイルサイズをチェック ★★★
-    console.log('Checking total file size in Google Drive...')
+    // フォルダへのアクセス権を明示的にチェック
+    try {
+      console.log(`Checking access permissions for folder: ${folderId}`)
+      await drive.files.get({ fileId: folderId, fields: 'id' })
+      console.log('✅ Access permission check successful.')
+    } catch (error) {
+      // drive.files.get が失敗した場合、権限がない、またはフォルダが存在しない可能性が高い
+      let detailedMessage =
+        'Failed to access Google Drive folder. Please ensure the folder exists and the service account has at least "Viewer" permission on the folder.'
+      if (error.response && error.response.data && error.response.data.error) {
+        const apiError = error.response.data.error
+        detailedMessage += ` (API Error: ${apiError.message} [${apiError.code}])`
+      }
+      console.error(
+        `Failed to access Google Drive folder. Please check if the service account has permission for folder ID: ${folderId}`,
+        error.response ? JSON.stringify(error.response.data, null, 2) : error
+      )
+      throw new Error(detailedMessage)
+    }
+
+    // ダウンロード前に合計ファイルサイズをチェック
+    console.log(`Checking total file size in Google Drive... for ${folderId}`)
     const totalSize = await getTotalSize(drive, folderId)
     const memoryLimit = parseMemoryToBytes(FUNCTION_MEMORY)
     // 念のため90%のマージンを設ける
@@ -197,6 +251,7 @@ async function downloadAndDeploy() {
     await deploy({
       project: PROJECT_ID,
       only: 'hosting',
+      target: targetHostingParam.value(),
       cwd: tempDir
     })
     console.log('✅ Deployment successful!')
@@ -213,6 +268,7 @@ async function downloadAndDeploy() {
  * ===================================================================
  */
 exports.pollingSync = onRequest({ ...V2_FUNCTION_OPTIONS, secrets: [POLLING_SYNC_SECRET] }, async (req, res) => {
+  await logExecutionIdentity()
   // --- Bearer Token Authentication ---
   const authHeader = req.headers.authorization || ''
   const [scheme, token] = authHeader.split(' ')
@@ -231,8 +287,10 @@ exports.pollingSync = onRequest({ ...V2_FUNCTION_OPTIONS, secrets: [POLLING_SYNC
     await downloadAndDeploy()
     res.status(200).send('Polling sync and deploy process completed successfully.')
   } catch (error) {
-    console.error('An error occurred during the polling sync process:', error)
-    res.status(500).send('Polling sync and deploy process failed. Check logs for details.')
+    // エラーオブジェクト全体をログに出力し、クライアントにはエラーメッセージを返す
+    console.error('An error occurred during the polling sync process:', error.stack || error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    res.status(500).send(`Polling sync and deploy process failed: ${errorMessage}`)
   }
 })
 
