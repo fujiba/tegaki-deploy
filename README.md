@@ -117,37 +117,21 @@ curl -X POST "YOUR_FUNCTION_URL" \
 ```
 
 ## ローカルでの開発 (Local Development)
+`gdrive-sync`関数をローカルでテスト・開発する手順は以下の通りです。
 
-```
+1. **ローカル用Secretファイルの作成**:
+   `functions/gdrive-sync`ディレクトリに`.secret.local`というファイルを作成し、認証トークンを記述します。このファイルは`.gitignore`によりリポジトリには含まれません。
+   ```sh
+   # functions/gdrive-sync/.secret.local
+   POLLING_SYNC_SECRET=ここに生成したトークンを貼り付けます
+   ```
 
-```
+1. **エミュレータの起動**:
+   ```sh
+   (cd functions/gdrive-sync && npm run serve)
+   ```
 
 1. **関数の呼び出し**:
-
-   # [PORT]と[PROJECT_ID]はエミュレータのログに表示される値に置き換えてください。YOUR_SECRET_TOKENは.secret.localに記載の値です。
-
-   `setup-firebase.sh`スクリプトを初回実行すると、ローカル開発用の設定ファイル（`.env.gdrive-sync` と `.secret.local`）が自動で生成されます。これらのファイルが既に存在する場合、スクリプトは上書きを行いません。これにより、`.env.local`など、ご自身で管理されている設定ファイルが保護されます。
-   `gdrive-sync`関数をローカルでテスト・開発する手順は以下の通りです。
-
-   # YOUR_SECRET_TOKENは .env.{projectId} ファイルに記載の値です。
-
-2. **エミュレータの起動**:
-
-3. **Firebase Local Emulators の設定**:
-   (cd functions/gdrive-sync && npm run serve)
-
-   ```sh
-
-   ```
-
-4. **関数の呼び出し**:
-
-   ```
-
-   ```
-
-5. **関数の呼び出し**:
-   # [PORT]と[PROJECT_ID]はエミュレータのログに表示される値に置き換えてください。YOUR_SECRET_TOKENは.secret.localに記載の値です。
    ```sh
    # [PORT]と[PROJECT_ID]はエミュレータのログに表示される値に置き換えてください。
    # YOUR_SECRET_TOKENは .env.{projectId} ファイルに記載の値です。
