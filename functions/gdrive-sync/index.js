@@ -337,6 +337,7 @@ exports.pollingSync = onRequest({ ...V2_FUNCTION_OPTIONS, secrets: [POLLING_SYNC
     // 6. デプロイ成功後、新しいスナップショットをFirestoreに保存
     await stateDocRef.set({
       snapshot: currentSnapshot,
+      totalSize,
       lastUpdated: FieldValue.serverTimestamp()
     })
     console.log(`Successfully updated state for target: ${target}`)
