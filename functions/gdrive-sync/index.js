@@ -6,6 +6,8 @@ const path = require('path')
 const os = require('os')
 const axios = require('axios')
 const { deploy } = require('firebase-tools')
+const jschardet = require('jschardet')
+const iconv = require('iconv-lite')
 
 const { onRequest } = require('firebase-functions/v2/https')
 const { onTaskDispatched } = require('firebase-functions/v2/tasks')
@@ -131,6 +133,46 @@ function parseMemoryToBytes(memoryString) {
 }
 
 /**
+ * 設定用のFirestoreドキュメントからGoogle DriveのフォルダURLを取得する。
+ * ドキュメントが存在しない場合、またはURLが設定されていない場合は、
+ * 関数のパラメータ（環境変数）からURLを読み取り、Firestoreに保存する。
+ * @param {string} target デプロイターゲット名 (例: 'prod')
+ * @return {Promise<string>} Google DriveのフォルダURL
+ */
+async function getFolderUrl(target) {
+  const configDocRef = db.collection('tegaki-deploy-config').doc(target)
+  const doc = await configDocRef.get()
+
+  if (doc.exists && doc.data().folderUrl) {
+    const urlFromFirestore = doc.data().folderUrl
+    console.log(`Using folder URL from Firestore for target "${target}": ${urlFromFirestore}`)
+    return urlFromFirestore
+  }
+
+  // Firestoreに設定がない場合、パラメータからフォールバック
+  const urlFromParam = folderUrlParam.value()
+  console.log(`Folder URL not found in Firestore for target "${target}". Falling back to parameter value.`)
+
+  if (!urlFromParam || urlFromParam.trim() === '') {
+    throw new Error(
+      `GDRIVE_FOLDER_URL is not defined in function parameters and no entry was found in Firestore for target "${target}".`
+    )
+  }
+
+  // 今後の運用のために、パラメータの値をFirestoreに保存する
+  console.log(`Saving folder URL to Firestore for target "${target}" for future use.`)
+  await configDocRef.set(
+    {
+      folderUrl: urlFromParam,
+      lastUpdated: FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  )
+
+  return urlFromParam
+}
+
+/**
  * ★★★ 変更: Google Driveのフォルダ状態（合計サイズとスナップショット）を一度に取得する ★★★
  * この関数の最初に、フォルダへのアクセス権チェックも行います。
  * @param {object} drive 認証済みのGoogle Drive APIクライアント
@@ -250,12 +292,14 @@ exports.pollingSync = onRequest({ ...V2_FUNCTION_OPTIONS, secrets: [POLLING_SYNC
     })
     const drive = google.drive({ version: 'v3', auth })
 
-    const folderId = parseFolderIdFromUrl(folderUrlParam.value())
+    const target = targetHostingParam.value()
+    const folderUrl = await getFolderUrl(target)
+
+    const folderId = parseFolderIdFromUrl(folderUrl)
     if (!folderId) {
       throw new Error('Folder ID could not be parsed from URL.')
     }
 
-    const target = targetHostingParam.value()
     const stateDocRef = db.collection('tegaki-deploy-states').doc(target)
 
     // 1. 現在のDriveの状態（権限チェック、サイズ、スナップショット）を一度に取得
@@ -331,27 +375,18 @@ exports.debounceDeploy = onTaskDispatched(V2_FUNCTION_OPTIONS, async (req) => {
     // エラーが発生してもリトライしないように、正常終了として扱うことも検討
   }
 })
-
 /**
- * ヘルパー関数: 指定されたフォルダからファイルを再帰的にダウンロード
- * Googleドキュメントやスプレッドシートは、それぞれHTMLやCSVとしてエクスポートします。
+ * ファイルをダウンロードし、必要に応じて文字コードとmetaタグをUTF-8に変換する
  * @param {object} drive 認証済みのGoogle Drive APIクライアント
  * @param {string} folderId ダウンロード対象のGoogle DriveフォルダID
  * @param {string} destPath ファイルの保存先となるローカルパス
  */
 async function downloadDirectory(drive, folderId, destPath) {
-  // GoogleドキュメントのMIMEタイプと、エクスポート形式・拡張子のマッピング
   const EXPORT_MIMETYPES = {
-    'application/vnd.google-apps.document': {
-      mimeType: 'text/html',
-      extension: '.html'
-    },
-    'application/vnd.google-apps.spreadsheet': {
-      mimeType: 'text/csv',
-      extension: '.csv'
-    }
-    // 必要に応じて他の形式（プレゼンテーションをPDFなど）も追加可能
+    'application/vnd.google-apps.document': { mimeType: 'text/html', extension: '.html' },
+    'application/vnd.google-apps.spreadsheet': { mimeType: 'text/csv', extension: '.csv' }
   }
+  const TEXT_FILE_EXTENSIONS = ['.html', '.htm', '.css', '.js']
 
   await fs.ensureDir(destPath)
 
@@ -359,9 +394,9 @@ async function downloadDirectory(drive, folderId, destPath) {
   do {
     const res = await drive.files.list({
       q: `'${folderId}' in parents and trashed = false`,
-      fields: 'nextPageToken, files(id, name, mimeType, size)',
+      fields: 'nextPageToken, files(id, name, mimeType)',
       pageToken: pageToken,
-      pageSize: 1000 // 1リクエストあたりの最大取得件数
+      pageSize: 1000
     })
 
     const files = res.data.files
@@ -369,24 +404,20 @@ async function downloadDirectory(drive, folderId, destPath) {
       return
     }
 
-    // Promise.allを使用して、フォルダ内のファイルのダウンロードを並列化
     await Promise.all(
       files.map(async (file) => {
         if (file.mimeType === 'application/vnd.google-apps.folder') {
-          console.log(`Descending into sub-folder: ${file.name}`)
           const subFolderPath = path.join(destPath, file.name)
-          await downloadDirectory(drive, file.id, subFolderPath) // 再帰的に処理
+          await downloadDirectory(drive, file.id, subFolderPath)
           return
         }
 
         const exportConfig = EXPORT_MIMETYPES[file.mimeType]
         if (exportConfig) {
-          // Googleドキュメント形式のファイルはエクスポート処理を行う
           const fileName = `${file.name}${exportConfig.extension}`
           const localPath = path.join(destPath, fileName)
           console.log(`Exporting Google Doc: ${file.name} as ${fileName}`)
           const dest = fs.createWriteStream(localPath)
-
           const exportRes = await drive.files.export(
             { fileId: file.id, mimeType: exportConfig.mimeType },
             { responseType: 'stream' }
@@ -395,15 +426,33 @@ async function downloadDirectory(drive, folderId, destPath) {
             exportRes.data.on('end', resolve).on('error', reject).pipe(dest)
           })
         } else {
-          // 通常のファイルはそのままダウンロード
           const localPath = path.join(destPath, file.name)
           console.log(`Downloading file: ${file.name}`)
-          const dest = fs.createWriteStream(localPath)
 
-          const downloadRes = await drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'stream' })
-          await new Promise((resolve, reject) => {
-            downloadRes.data.on('end', resolve).on('error', reject).pipe(dest)
-          })
+          const downloadRes = await drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'arraybuffer' })
+          let fileBuffer = Buffer.from(downloadRes.data)
+
+          const fileExt = path.extname(file.name).toLowerCase()
+          if (TEXT_FILE_EXTENSIONS.includes(fileExt)) {
+            const detected = jschardet.detect(fileBuffer)
+            if (detected && detected.confidence > 0.8 && detected.encoding.toUpperCase() !== 'UTF-8') {
+              console.log(`  -> Detected encoding: ${detected.encoding}. Converting to UTF-8.`)
+              let utf8String = iconv.decode(fileBuffer, detected.encoding)
+
+              // HTMLファイルの場合、metaタグのcharsetも書き換える
+              if (fileExt === '.html' || fileExt === '.htm') {
+                const charsetRegex = /(<meta[^>]*charset=["']?)(shift_jis|sjis|euc-jp)(["']?[^>]*>)/i
+                if (charsetRegex.test(utf8String)) {
+                  console.log('  -> Found charset meta tag. Rewriting to UTF-8.')
+                  utf8String = utf8String.replace(charsetRegex, '$1UTF-8$3')
+                }
+              }
+
+              fileBuffer = Buffer.from(utf8String, 'utf8')
+            }
+          }
+
+          await fs.writeFile(localPath, fileBuffer)
         }
       })
     )
