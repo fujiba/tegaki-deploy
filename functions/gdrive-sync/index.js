@@ -1,5 +1,6 @@
 const admin = require('firebase-admin')
 const { FieldValue } = require('firebase-admin/firestore')
+const crypto = require('crypto')
 const { google } = require('googleapis')
 const fs = require('fs-extra')
 const path = require('path')
@@ -177,7 +178,7 @@ async function getFolderUrl(target) {
  * この関数の最初に、フォルダへのアクセス権チェックも行います。
  * @param {object} drive 認証済みのGoogle Drive APIクライアント
  * @param {string} folderId 対象のGoogle DriveフォルダID
- * @return {Promise<{totalSize: number, snapshot: string}>} 合計サイズとスナップショットを含むオブジェクト
+ * @return {Promise<{totalSize: number, snapshotHash: string}>} 合計サイズとスナップショットのハッシュ値を含むオブジェクト
  */
 async function getDriveFolderState(drive, folderId) {
   // 1. まず、フォルダ自体にアクセスできるかを確認
@@ -227,9 +228,10 @@ async function getDriveFolderState(drive, folderId) {
   }
 
   snapshotParts.sort()
-  const snapshot = snapshotParts.join('|')
+  const snapshotString = snapshotParts.join('|')
+  const snapshotHash = crypto.createHash('sha256').update(snapshotString).digest('hex')
 
-  return { totalSize, snapshot }
+  return { totalSize, snapshotHash }
 }
 
 /**
@@ -303,14 +305,14 @@ exports.pollingSync = onRequest({ ...V2_FUNCTION_OPTIONS, secrets: [POLLING_SYNC
     const stateDocRef = db.collection('tegaki-deploy-states').doc(target)
 
     // 1. 現在のDriveの状態（権限チェック、サイズ、スナップショット）を一度に取得
-    const { totalSize, snapshot: currentSnapshot } = await getDriveFolderState(drive, folderId)
+    const { totalSize, snapshotHash: currentSnapshotHash } = await getDriveFolderState(drive, folderId)
 
     // 2. Firestoreから前回のスナップショットを取得
     const doc = await stateDocRef.get()
-    const previousSnapshot = doc.exists ? doc.data().snapshot : null
+    const previousSnapshotHash = doc.exists ? doc.data().snapshotHash : null
 
     // 3. スナップショットを比較
-    if (currentSnapshot === previousSnapshot) {
+    if (currentSnapshotHash === previousSnapshotHash) {
       console.log('No changes detected in Google Drive. Skipping deployment.')
       res.status(200).send('No changes detected. Skipped deployment.')
       return
@@ -336,7 +338,7 @@ exports.pollingSync = onRequest({ ...V2_FUNCTION_OPTIONS, secrets: [POLLING_SYNC
 
     // 6. デプロイ成功後、新しいスナップショットをFirestoreに保存
     await stateDocRef.set({
-      snapshot: currentSnapshot,
+      snapshotHash: currentSnapshotHash,
       totalSize,
       lastUpdated: FieldValue.serverTimestamp()
     })
