@@ -21,6 +21,8 @@ Tegaki Deployは、Google Driveをコンテンツ管理のインターフェー�
 - Firebase Hostingによる高速かつ安全な配信: グローバルCDNを介した高速なコンテンツ配信と、SSL証明書の自動発行・更新により、高いパフォーマンスとセキュリティを確保します。
 - Terraformによるインフラのコード管理（IaC）: Google Cloud環境の構成をコードで定義することにより、インフラの再現性と管理性を向上させます。
 - GitHub ActionsによるCI/CDプロセスの自動化: コンテンツの変更検知からデプロイまでの一連のプロセスを自動化します。
+- **柔軟なリダイレクト設定**: `.htaccess`ファイルを配置するだけで、リダイレクト設定を簡単に追加・管理できます。
+- **文字コードの自動変換**: Shift_JISやEUC-JPで作成されたHTML/CSS/JSファイルも、デプロイ時に自動でUTF-8に変換されます。
 
 ## 動作原理 (How it works)
 
@@ -28,7 +30,7 @@ Tegaki Deployは、Google Driveをコンテンツ管理のインターフェー�
 
 1. コンテンツ更新: 利用者がGoogle Driveの指定フォルダ内にあるファイルを追加または更新します。
 2. 変更検知: GitHub Actionsが定期的に変更をポーリング、またはFirebase FunctionsがPush通知を介して即時検知します。
-3. サイト構築: tegaki-deployのワークフローが、Google Driveから最新のファイル群を取得します。
+3. サイト構築: tegaki-deployのワークフローが、Google Driveから最新のファイル群を取得します。その際、文字コード変換や`.htaccess`の解析も自動で行われます。
 4. デプロイ: 取得したファイルをFirebase Hostingへ自動的にデプロイします。
 
 ## 利用手順 (Getting Started)
@@ -107,7 +109,28 @@ Tegaki Deployは、Google Driveをコンテンツ管理のインターフェー�
 
 指定されたGoogle Driveフォルダへのファイル配置によって実行されます。GitHub Actionsに設定されたスケジュールに基づき、ウェブサイトは自動的に更新されます。
 
-### 2. 手動での即時更新
+### 2. リダイレクト設定 (.htaccess)
+
+各フォルダ内に標準的な`.htaccess`ファイルを配置することで、リダイレクト（転送）ルールを設定できます。
+本フレームワークはデプロイ時に`.htaccess`ファイルを解析し、自動的にFirebase Hostingのリダイレクト設定に変換します。
+
+#### サポートされる書式
+
+`Redirect`ディレクティブの基本的な書式をサポートしています。
+
+```
+# 恒久的なリダイレクト (301)
+Redirect permanent /old-page.html /new-page.html
+Redirect 301 /another-old-page.html /another-new-page.html
+
+# 一時的なリダイレクト (302)
+Redirect temp /temporary-page.html /target-page.html
+Redirect 302 /another-temporary-page.html /another-target-page.html
+```
+
+サブフォルダ内に配置された`.htaccess`も再帰的に解析されます。
+
+### 3. 手動での即時更新
 
 `pollingSync`関数は汎用的なAPIとして機能します。認証トークンをヘッダーに含めることで、任意のタイミングでこのAPIを呼び出し、即時デプロイを実行することが可能です。これは、管理画面からの手動更新ボタンの実装などに活用できます。
 
@@ -117,16 +140,19 @@ curl -X POST "YOUR_FUNCTION_URL" \
 ```
 
 ## ローカルでの開発 (Local Development)
+
 `gdrive-sync`関数をローカルでテスト・開発する手順は以下の通りです。
 
 1. **ローカル用Secretファイルの作成**:
    `functions/gdrive-sync`ディレクトリに`.secret.local`というファイルを作成し、認証トークンを記述します。このファイルは`.gitignore`によりリポジトリには含まれません。
+
    ```sh
    # functions/gdrive-sync/.secret.local
    POLLING_SYNC_SECRET=ここに生成したトークンを貼り付けます
    ```
 
 1. **エミュレータの起動**:
+
    ```sh
    (cd functions/gdrive-sync && npm run serve)
    ```

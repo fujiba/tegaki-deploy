@@ -244,7 +244,8 @@ async function downloadAndDeploy(drive, folderId) {
   console.log(`Created temporary directory: ${tempDir}`)
   try {
     console.log('Starting file download process...')
-    await downloadDirectory(drive, folderId, tempDir)
+    const deployContext = { redirects: [] }
+    await downloadDirectory(drive, folderId, tempDir, deployContext)
     console.log('✅ Successfully downloaded all files from Google Drive.')
 
     console.log(`Deploying to Firebase Hosting target: ${targetHostingParam.value()}...`)
@@ -255,6 +256,14 @@ async function downloadAndDeploy(drive, folderId) {
         ignore: ['firebase.json', '**/.*', '**/node_modules/**']
       }
     }
+
+    if (deployContext.redirects.length > 0) {
+      // サブフォルダにも.htaccessがある場合を考慮し、sourceパスで重複を除去
+      const uniqueRedirects = Array.from(new Map(deployContext.redirects.map((r) => [r.source, r])).values())
+      console.log(`Found ${uniqueRedirects.length} unique redirect rule(s) to apply.${uniqueRedirects}`)
+      firebaseJsonContent.hosting.redirects = uniqueRedirects
+    }
+
     await fs.writeJson(tempFirebaseJsonPath, firebaseJsonContent)
 
     await deploy({
@@ -379,12 +388,47 @@ exports.debounceDeploy = onTaskDispatched(V2_FUNCTION_OPTIONS, async (req) => {
   }
 })
 /**
+ * .htaccessの内容を解析し、Firebaseのリダイレクト設定オブジェクトの配列を返す
+ * @param {Buffer} buffer .htaccessファイルの内容を含むバッファ
+ * @returns {Array<object>} Firebaseのリダイレクト設定オブジェクトの配列
+ */
+function parseHtaccess(buffer) {
+  try {
+    const content = buffer.toString('utf8')
+    const lines = content.split('\n')
+    const redirects = []
+    const regex = /^Redirect (permanent|temp|301|302) (\S+) (\S+)/i
+
+    for (const line of lines) {
+      const match = line.trim().match(regex)
+      if (match) {
+        const [, type, source, destination] = match
+        let statusCode = 302 // Default to temporary
+        if (type.toLowerCase() === 'permanent' || type === '301') {
+          statusCode = 301
+        }
+        redirects.push({
+          source,
+          destination,
+          type: statusCode
+        })
+      }
+    }
+    return redirects
+  } catch (error) {
+    console.error('Error processing .htaccess file:', error)
+    return [] // エラー時は空配列を返す
+  }
+}
+
+/**
  * ファイルをダウンロードし、必要に応じて文字コードとmetaタグをUTF-8に変換する
  * @param {object} drive 認証済みのGoogle Drive APIクライアント
  * @param {string} folderId ダウンロード対象のGoogle DriveフォルダID
  * @param {string} destPath ファイルの保存先となるローカルパス
+ * @param {object} context デプロイに関するコンテキスト情報（リダイレクト設定など）
  */
-async function downloadDirectory(drive, folderId, destPath) {
+async function downloadDirectory(drive, folderId, destPath, context) {
   const EXPORT_MIMETYPES = {
     'application/vnd.google-apps.document': { mimeType: 'text/html', extension: '.html' },
     'application/vnd.google-apps.spreadsheet': { mimeType: 'text/csv', extension: '.csv' }
@@ -411,7 +455,7 @@ async function downloadDirectory(drive, folderId, destPath) {
       files.map(async (file) => {
         if (file.mimeType === 'application/vnd.google-apps.folder') {
           const subFolderPath = path.join(destPath, file.name)
-          await downloadDirectory(drive, file.id, subFolderPath)
+          await downloadDirectory(drive, file.id, subFolderPath, context)
           return
         }
 
@@ -434,6 +478,14 @@ async function downloadDirectory(drive, folderId, destPath) {
 
           const downloadRes = await drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'arraybuffer' })
           let fileBuffer = Buffer.from(downloadRes.data)
+
+          // .htaccessを処理してリダイレクト設定を収集
+          if (file.name.toLowerCase() === '.htaccess') {
+            const newRedirects = parseHtaccess(fileBuffer)
+            if (newRedirects.length > 0) {
+              context.redirects.push(...newRedirects)
+            }
+          }
 
           const fileExt = path.extname(file.name).toLowerCase()
           if (TEXT_FILE_EXTENSIONS.includes(fileExt)) {
