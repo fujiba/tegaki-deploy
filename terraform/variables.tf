@@ -19,6 +19,18 @@ variable "enable_realtime_update" {
   default     = false # Or read from config.yaml in init script
 }
 
+variable "enable_schedule_update" {
+  type = bool
+  description = "Set to true to update hosting schedule"
+  default = false
+}
+
+variable "scheduler_update_schedule" {
+  type = string
+  description = "Schedule for polling sync function"
+  default = "0 * * * *"
+}
+
 variable "region" {
   type        = string
   description = "region name for cloud task"

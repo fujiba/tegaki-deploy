@@ -60,11 +60,6 @@ resource "google_cloud_scheduler_job" "polling_sync_job" {
       "Authorization" = "Bearer ${data.google_secret_manager_secret_version.polling_sync_secret.secret_data}"
       "Content-Type" = "application/json"
     }
-
-    # ジョブを実行するサービスアカウントとして、上で作成した専用アカウントを指定します。
-    oauth_token {
-      service_account_email = google_service_account.scheduler_invoker.email
-    }
   }
 
   # このジョブが、上で作成したIAMバインディングに依存することを明示します。

@@ -43,6 +43,7 @@ locals {
     "drive.googleapis.com",
     "cloudtasks.googleapis.com",
     "firestore.googleapis.com",
+    "cloudscheduler.googleapis.com"
   ]
 }
 

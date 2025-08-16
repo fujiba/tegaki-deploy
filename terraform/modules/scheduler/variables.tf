@@ -10,5 +10,4 @@ variable "region" {
 variable "schedule" {
   type = string
   description = "execution schedule"
-  default = "1 0 * * *"
 }

@@ -35,7 +35,7 @@ module "hosting" {
 }
 
 module "cloudtasks" {
-count = var.enable_realtime_update ? 1 : 0
+  count = var.enable_realtime_update ? 1 : 0
   source       = "./modules/cloudtasks"
   project_id = module.project.project_id
   region = var.region
@@ -52,4 +52,16 @@ module "service_account" {
   providers = {
     google = google
   }
+}
+
+module "scheduler" {
+  count = var.enable_schedule_update ? 1 : 0
+  source = "./modules/scheduler"
+  project_id = module.project.project_id
+  region = var.region
+  schedule = var.scheduler_update_schedule
+  providers = {
+    google = google
+  }
+  depends_on = [module.project]
 }
