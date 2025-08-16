@@ -1,0 +1,17 @@
+{
+  "name": "tegaki-deploy",
+  "version": "0.1.0",
+  "description": "Say goodbye to server management! `tegaki-deploy` is an automated framework to publish a static website on Firebase Hosting directly from a Google Drive folder. It uses Terraform and GitHub Actions to handle everything. No Git, no CLI, no complex CMS needed. Just drag, drop, and deploy.",
+  "scripts": {
+    "init": "scripts/init-setup.sh",
+    "deploy:gdrive-sync": "npm install --prefix functions/gdrive-sync && npm run deploy --prefix functions/gdrive-sync"
+  },
+  "author": "T.Fujiba",
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^9.2.0",
+    "eslint-config-prettier": "^9.1.0",
+    "firebase-tools": "^13.8.0",
+    "prettier": "^3.2.5"
+  }
+}
